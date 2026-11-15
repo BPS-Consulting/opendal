@@ -115,6 +115,9 @@ fn metadata_from_gdrive_file(file: &GdriveFile) -> Result<Metadata> {
             Error::new(ErrorKind::Unexpected, "parse last modified time").set_source(e)
         })?);
     }
+    if let Some(md5_checksum) = &file.md5_checksum {
+        metadata.content_md5(md5_checksum.clone());
+    }
 
     Ok(metadata.build())
 }
@@ -832,6 +835,7 @@ mod tests {
                 name: "dir".to_string(),
                 size: None,
                 modified_time: None,
+                md5_checksum: None,
                 parents: vec!["parent-id".to_string()],
             })
             .await
@@ -840,6 +844,32 @@ mod tests {
         assert!(lister.pending_dirs.is_empty());
         assert!(!lister.dir_id_to_path.contains_key("dir-id"));
         assert!(lister.entry_buffer.is_empty());
+    }
+
+    #[test]
+    fn metadata_carries_content_md5_when_drive_returns_it() {
+        let file: GdriveFile = serde_json::from_str(
+            r#"{"id":"f","name":"a.onyx","mimeType":"application/octet-stream","size":"4","md5Checksum":"d41d8cd98f00b204e9800998ecf8427e"}"#,
+        )
+        .unwrap();
+        let metadata = metadata_from_gdrive_file(&file).unwrap();
+        assert_eq!(
+            metadata.content_md5(),
+            Some("d41d8cd98f00b204e9800998ecf8427e")
+        );
+    }
+
+    #[test]
+    fn metadata_has_no_content_md5_for_folders_and_native_docs() {
+        // Drive omits `md5Checksum` for folders and Google-native documents.
+        let file: GdriveFile = serde_json::from_str(
+            r#"{"id":"d","name":"dir","mimeType":"application/vnd.google-apps.folder"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            metadata_from_gdrive_file(&file).unwrap().content_md5(),
+            None
+        );
     }
 
     #[test]
