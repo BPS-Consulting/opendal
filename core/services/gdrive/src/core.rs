@@ -245,9 +245,10 @@ impl GdriveCore {
         file_id: &str,
     ) -> Result<Response<Buffer>> {
         // The file metadata in the Google Drive API is very complex.
-        // For now, we only need the file id, name, mime type and modified time.
+        // For now, we only need the file id, name, mime type, size, modified
+        // time and content MD5.
         let mut req = Request::get(format!(
-            "https://www.googleapis.com/drive/v3/files/{file_id}?fields=id,name,mimeType,size,modifiedTime&supportsAllDrives=true"
+            "https://www.googleapis.com/drive/v3/files/{file_id}?fields=id,name,mimeType,size,modifiedTime,md5Checksum&supportsAllDrives=true"
         ))
         .extension(Operation::Stat)
         .extension(ServiceOperation("GetFile"))
@@ -316,7 +317,7 @@ impl GdriveCore {
         url = url.push("q", &percent_encode_path(&q));
         url = url.push(
             "fields",
-            "nextPageToken,files(id,name,mimeType,size,modifiedTime,parents)",
+            "nextPageToken,files(id,name,mimeType,size,modifiedTime,md5Checksum,parents)",
         );
         if !next_page_token.is_empty() {
             url = url.push("pageToken", next_page_token);
@@ -370,7 +371,7 @@ impl GdriveCore {
         // Include 'parents' field to know which directory each file belongs to
         url = url.push(
             "fields",
-            "nextPageToken,files(id,name,mimeType,size,modifiedTime,parents)",
+            "nextPageToken,files(id,name,mimeType,size,modifiedTime,md5Checksum,parents)",
         );
         if !next_page_token.is_empty() {
             url = url.push("pageToken", next_page_token);
@@ -475,7 +476,7 @@ impl GdriveCore {
     ) -> Result<Response<Buffer>> {
         let parent = self.ensure_dir(ctx, get_parent(path)).await?;
 
-        let url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true";
+        let url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,size,md5Checksum";
 
         let file_name = get_basename(path);
 
@@ -528,7 +529,7 @@ impl GdriveCore {
         body: Buffer,
     ) -> Result<Response<Buffer>> {
         let url = format!(
-            "https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media&supportsAllDrives=true"
+            "https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media&supportsAllDrives=true&fields=id,name,mimeType,size,md5Checksum"
         );
 
         let mut req = Request::patch(url)
@@ -950,6 +951,10 @@ pub struct GdriveFile {
     // if other operations(such as search) do not specify the `fields` query parameter,
     // try to access this field, it will be `None`.
     pub modified_time: Option<String>,
+    // MD5 of the file's content, as hex. Drive only returns it for files with
+    // binary content (not folders, nor native Google Docs/Sheets), and only
+    // when the `fields` query parameter contains `md5Checksum`.
+    pub md5_checksum: Option<String>,
     // Parents are returned when using batch listing to identify which directory
     // a file belongs to. This is needed for the OR query optimization.
     #[serde(default)]

@@ -89,17 +89,24 @@ impl oio::OneShotWrite for GdriveWriter {
                 StatusCode::OK | StatusCode::CREATED => {
                     let mut metadata = MetadataBuilder::file(size as u64);
 
+                    // The upload response carries `md5Checksum` (the URL asks
+                    // for it), which callers use as the new version token of
+                    // what they just wrote.
+                    let bs = resp.into_body();
+                    let file: GdriveFile =
+                        serde_json::from_reader(bs.reader()).map_err(new_json_deserialize_error)?;
+                    let mut written = MetadataBuilder::unknown();
+                    if let Some(md5_checksum) = &file.md5_checksum {
+                        written.content_md5(md5_checksum.clone());
+                    }
                     if current_file_id.is_none() {
-                        let bs = resp.into_body();
-                        let file: GdriveFile = serde_json::from_reader(bs.reader())
-                            .map_err(new_json_deserialize_error)?;
                         metadata.content_type(file.mime_type);
                         self.core.cache_file_id(&self.path, &file.id).await;
                     }
                     self.core
                         .record_recent_upsert(&self.path, metadata.build())
                         .await;
-                    return Ok(MetadataBuilder::unknown().build());
+                    return Ok(written.build());
                 }
                 StatusCode::NOT_FOUND if !retried && current_file_id.is_some() => {
                     retried = true;

@@ -337,6 +337,9 @@ impl Service for GdriveBackend {
                 Error::new(ErrorKind::Unexpected, "parse last modified time").set_source(e)
             })?);
         }
+        if let Some(v) = gdrive_file.md5_checksum {
+            meta.content_md5(v);
+        }
         Ok(RpStat::new(meta.build()))
     }
     fn read(&self, ctx: &OperationContext, path: &str, args: OpRead) -> Result<Self::Reader> {
