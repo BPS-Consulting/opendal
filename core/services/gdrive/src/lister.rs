@@ -98,7 +98,7 @@ impl GdriveLister {
     }
 }
 
-fn metadata_from_gdrive_file(file: &GdriveFile) -> Result<Metadata> {
+pub(crate) fn metadata_from_gdrive_file(file: &GdriveFile) -> Result<Metadata> {
     let mut metadata =
         if file.mime_type.as_str() == "application/vnd.google-apps.folder" {
             MetadataBuilder::dir()
@@ -120,17 +120,6 @@ fn metadata_from_gdrive_file(file: &GdriveFile) -> Result<Metadata> {
     }
 
     Ok(metadata.build())
-}
-
-/// Google-native documents (Docs, Sheets, Slides, shortcuts, ...) have no
-/// binary content: Drive reports no `size` or `md5Checksum` for them and
-/// refuses a plain download. Listed, they come out with an unknown mode, so
-/// `CompleteLister` stats each one to resolve it, and `stat` rejects a file
-/// with no size, failing the *whole* listing over one such file. They cannot
-/// be read through this service, so they are left out of listings.
-fn is_native_document(file: &GdriveFile) -> bool {
-    file.mime_type.starts_with("application/vnd.google-apps.")
-        && file.mime_type != "application/vnd.google-apps.folder"
 }
 
 impl oio::PageList for GdriveLister {
@@ -259,11 +248,7 @@ impl oio::PageList for GdriveLister {
             ctx.done = true;
         }
 
-        for mut file in decoded_response
-            .files
-            .into_iter()
-            .filter(|f| !is_native_document(f))
-        {
+        for mut file in decoded_response.files {
             if file.mime_type.as_str() == "application/vnd.google-apps.folder"
                 && !file.name.ends_with('/')
             {
@@ -714,9 +699,6 @@ impl GdriveFlatLister {
 
     /// Process a single file from the API response
     async fn process_file(&mut self, mut file: GdriveFile) -> Result<()> {
-        if is_native_document(&file) {
-            return Ok(());
-        }
         let is_dir = file.mime_type.as_str() == "application/vnd.google-apps.folder";
 
         if is_dir && !file.name.ends_with('/') {
@@ -890,51 +872,42 @@ mod tests {
         );
     }
 
-    fn drive_file(json: &str) -> GdriveFile {
-        serde_json::from_str(json).unwrap()
-    }
-
     #[test]
-    fn google_native_documents_are_recognised_but_folders_are_not() {
-        // Docs, Sheets, shortcuts: no size, no md5, not downloadable.
-        for mime in [
-            "application/vnd.google-apps.document",
-            "application/vnd.google-apps.spreadsheet",
-            "application/vnd.google-apps.shortcut",
-        ] {
-            let file = drive_file(&format!(r#"{{"id":"d","name":"n","mimeType":"{mime}"}}"#));
-            assert!(is_native_document(&file), "{mime}");
-        }
-        let folder = drive_file(
-            r#"{"id":"d","name":"dir","mimeType":"application/vnd.google-apps.folder"}"#,
+    fn native_documents_map_to_unknown_mode_instead_of_failing() {
+        // A Google Sheet keeps whatever name it was uploaded under, including
+        // an `.xlsx` extension, but Drive reports no size for it. That must not
+        // be an error: stat and list both report it with an unknown mode, and
+        // the core keeps such entries as listed.
+        let sheet: GdriveFile = serde_json::from_str(
+            r#"{"id":"s","name":"T8 Budget 2016-2017.xlsx","mimeType":"application/vnd.google-apps.spreadsheet","modifiedTime":"2017-06-29T00:50:52.245Z"}"#,
+        )
+        .unwrap();
+        let metadata = metadata_from_gdrive_file(&sheet).unwrap();
+        assert_eq!(metadata.mode(), EntryMode::Unknown);
+        assert_eq!(
+            metadata.content_type(),
+            Some("application/vnd.google-apps.spreadsheet")
         );
-        assert!(!is_native_document(&folder));
-        let binary = drive_file(
+        assert!(metadata.last_modified().is_some());
+
+        // Ordinary files and folders are unaffected.
+        let file: GdriveFile = serde_json::from_str(
             r#"{"id":"f","name":"a.onyx","mimeType":"application/octet-stream","size":"4"}"#,
+        )
+        .unwrap();
+        let metadata = metadata_from_gdrive_file(&file).unwrap();
+        assert_eq!(metadata.mode(), EntryMode::FILE);
+        assert_eq!(metadata.content_length(), 4);
+        let folder: GdriveFile = serde_json::from_str(
+            r#"{"id":"d","name":"dir","mimeType":"application/vnd.google-apps.folder"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            metadata_from_gdrive_file(&folder).unwrap().mode(),
+            EntryMode::DIR
         );
-        assert!(!is_native_document(&binary));
     }
 
-    #[tokio::test]
-    async fn flat_listing_skips_native_documents() {
-        // A native document would otherwise reach CompleteLister with an
-        // unknown mode, and stat of it fails the whole listing.
-        let core = mock_gdrive_core();
-        let mut lister =
-            GdriveFlatLister::new("parent/".to_string(), core, mock_operation_context());
-        lister
-            .dir_id_to_path
-            .insert("parent-id".to_string(), "parent/".to_string());
-
-        lister
-            .process_file(drive_file(
-                r#"{"id":"g","name":"Budget.xlsx","mimeType":"application/vnd.google-apps.spreadsheet","parents":["parent-id"]}"#,
-            ))
-            .await
-            .unwrap();
-
-        assert!(lister.entry_buffer.is_empty());
-    }
     #[test]
     fn test_apply_refreshed_batch_clears_page_token() {
         let core = mock_gdrive_core();
