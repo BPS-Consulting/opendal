@@ -29,6 +29,7 @@ use super::core::{ErrorContext, GdriveCore};
 use super::deleter::GdriveDeleter;
 use super::lister::GdriveFlatLister;
 use super::lister::GdriveLister;
+use super::lister::metadata_from_gdrive_file;
 use super::reader::*;
 use super::writer::GdriveWriter;
 use opendal_core::raw::*;
@@ -313,34 +314,10 @@ impl Service for GdriveBackend {
         let gdrive_file: GdriveFile =
             serde_json::from_reader(bs.reader()).map_err(new_json_deserialize_error)?;
 
-        let file_type = if gdrive_file.mime_type == "application/vnd.google-apps.folder" {
-            EntryMode::DIR
-        } else {
-            EntryMode::FILE
-        };
-        let mut meta = if file_type == EntryMode::FILE {
-            let size = gdrive_file.size.as_deref().ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "gdrive stat response does not contain file size",
-                )
-            })?;
-            MetadataBuilder::file(size.parse::<u64>().map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "parse content length").set_source(e)
-            })?)
-        } else {
-            MetadataBuilder::dir()
-        };
-        meta.content_type(gdrive_file.mime_type);
-        if let Some(v) = gdrive_file.modified_time {
-            meta.last_modified(v.parse::<Timestamp>().map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "parse last modified time").set_source(e)
-            })?);
-        }
-        if let Some(v) = gdrive_file.md5_checksum {
-            meta.content_md5(v);
-        }
-        Ok(RpStat::new(meta.build()))
+        // The same mapping the listers use, so stat and list agree on every
+        // entry. In particular a Google-native document (Doc, Sheet, shortcut)
+        // has no size: it is reported with an unknown mode, not an error.
+        Ok(RpStat::new(metadata_from_gdrive_file(&gdrive_file)?))
     }
     fn read(&self, ctx: &OperationContext, path: &str, args: OpRead) -> Result<Self::Reader> {
         let output: oio::StreamReader<GdriveReader> = {
