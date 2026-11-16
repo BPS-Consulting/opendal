@@ -180,13 +180,21 @@ impl Builder for SharepointBuilder {
 
             shared: true,
 
+            // Onyx integration branch only (not part of the upstream pull request):
+            // declared so a caller can make its upload conditional on the etag it
+            // just read, closing the gap between "check the version" and "write".
+            // The spurious-failure concern below is real for a long-lived etag but
+            // benign here, because such a caller stats immediately before writing,
+            // and a failed precondition just sends it back to check again.
+            write_with_if_match: true,
+
             // Deliberately not declared yet, pending verification against a real
             // document library:
             //
             // - `stat_with_version` / `list_with_versions`: whether versions are
             //   returned depends on the library's versioning settings.
-            // - `read_with_if_none_match` / `stat_with_if_none_match` /
-            //   `write_with_if_match`: these ride on `eTag`, which on Graph covers
+            // - `read_with_if_none_match` / `stat_with_if_none_match`
+            //   (and, for a long-lived etag, `write_with_if_match`): these ride on `eTag`, which on Graph covers
             //   metadata *and* content. SharePoint libraries carry metadata columns
             //   that can change `eTag` without the bytes changing, which would make
             //   conditional requests fail spuriously. `cTag` is content-only but is
